@@ -1,0 +1,24 @@
+name = "oauth2-proxy"
+compatibility_date = "2024-04-29"
+
+# Variables that can be accessed from your Worker
+[vars]
+CLIENT_ID = "your_client_id"
+CLIENT_SECRET = "your_client_secret"
+AUTH_URL = "https://example.com/oauth/authorize"
+TOKEN_URL = "https://example.com/oauth/token"
+
+# For storing PKCE verifiers and state (recommended for production)
+[[kv_namespaces]]
+binding = "STATE_STORE"
+id = "your-kv-namespace-id"
+preview_id = "your-preview-kv-namespace-id"
+
+# For storing encryption keys (though Secret is better for this)
+[[kv_namespaces]]
+binding = "KEY_STORE"
+id = "your-key-namespace-id"
+preview_id = "your-preview-key-namespace-id"
+
+# Define secrets (in production, set these with `wrangler secret put`)
+# - ENCRYPTION_KEY: For token encryption (32+ bytes recommended)
