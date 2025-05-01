@@ -7,12 +7,13 @@
 
 // Configuration (in production, use Workers Secrets for these values)
 const CONFIG = {
-  client_id: "YOUR_CLIENT_ID",
-  client_secret: "YOUR_CLIENT_SECRET",
-  auth_url: "https://example.com/oauth/authorize",
-  token_url: "https://example.com/oauth/token",
-  redirect_url: "https://your-worker.your-account.workers.dev/callback",
-  scopes: ["read", "profile"], // Adjust based on OAuth provider requirements
+  client_id: "2f6be220-fb0d-446f-85ea-e9ec186c0170",
+  client_secret: "redacted",
+  auth_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+  token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+  redirect_url:
+    "https://2auth2proxy.ab38cebcb98ed1f0de836e3ac788341d.workers.dev/callback",
+  scopes: [".default"],
 };
 
 // Store PKCE verifiers (in production, use Workers KV)
@@ -53,7 +54,7 @@ async function handleRequest(request) {
  */
 async function handleAuth(request) {
   // Generate PKCE challenge and verifier
-  const { verifier, challenge } = generatePKCE();
+  const { verifier, challenge } = await generatePKCE();
 
   // Generate a random state
   const state = crypto.randomUUID();
@@ -72,7 +73,10 @@ async function handleAuth(request) {
   authUrl.searchParams.append("scope", CONFIG.scopes.join(" "));
 
   return new Response(JSON.stringify({ url: authUrl.toString() }), {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
   });
 }
 
@@ -143,7 +147,7 @@ async function handleProxy(request) {
   }
 
   try {
-    const {
+    let {
       encrypted_token,
       endpoint,
       method,
@@ -262,9 +266,16 @@ async function serveClient() {
   });
 }
 
-/**
- * Generate PKCE challenge and verifier
- */
+function base64URLEncode(buffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  let base64 = btoa(binary);
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function generatePKCE() {
   // Generate a random string for the verifier
   const randomBytes = new Uint8Array(32);
@@ -279,17 +290,6 @@ function generatePKCE() {
     return { verifier, challenge };
   });
 }
-
-/**
- * Base64 URL Encoding
- */
-function base64URLEncode(buffer) {
-  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
 /**
  * Encrypt token data using AES-GCM
  * Note: In production, the encryption key should be stored in Workers Secrets
@@ -381,3 +381,161 @@ function base64URLDecode(str) {
   }
   return bytes;
 }
+
+const HTML_CLIENT = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OAuth2 Proxy Client</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    button {
+      background-color: #4CAF50;
+      border: none;
+      color: white;
+      padding: 10px 20px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 4px 2px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    pre {
+      background-color: #f5f5f5;
+      padding: 15px;
+      border-radius: 5px;
+      overflow-x: auto;
+    }
+    #tokenContainer {
+      margin-top: 20px;
+      display: none;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Cloudflare Worker OAuth2 Proxy</h1>
+  
+  <div id="authFlow">
+    <button id="authorizeBtn">Authorize Application</button>
+    <div id="tokenContainer">
+      <h3>Encrypted Token (stored client-side)</h3>
+      <pre id="encryptedToken"></pre>
+    </div>
+  </div>
+  
+  <div id="apiAccess" class="hidden">
+    <h2>API Access</h2>
+    <select id="apiEndpoint">
+      <option value="profile">Get User Profile</option>
+      <option value="data">Get User Data</option>
+    </select>
+    <button id="fetchDataBtn">Fetch Data</button>
+    
+    <h3>Response</h3>
+    <pre id="apiResponse"></pre>
+  </div>
+  
+  <script>
+    // Store the encrypted token in localStorage
+    let encryptedToken = null;
+    
+    // Check if we already have a token
+    const storedToken = localStorage.getItem('encryptedToken');
+    if (storedToken) {
+      encryptedToken = JSON.parse(storedToken);
+      document.getElementById('encryptedToken').textContent = JSON.stringify(encryptedToken, null, 2);
+      document.getElementById('tokenContainer').style.display = 'block';
+      document.getElementById('apiAccess').classList.remove('hidden');
+    }
+    
+    // Handle authorization
+    document.getElementById('authorizeBtn').addEventListener('click', async () => {
+      try {
+        // Get authorization URL from server
+        const response = await fetch('/auth');
+        const data = await response.json();
+        
+        // Open the authorization URL in a new window
+        const authWindow = window.open(data.url, '_blank', 'width=600,height=700');
+        
+        // Poll for authorization completion (a better approach would be to use a redirect)
+        const checkInterval = setInterval(() => {
+          try {
+            if (authWindow.closed) {
+              clearInterval(checkInterval);
+              console.log('Authorization window closed');
+              // In a real implementation, we would handle the callback properly
+            }
+          } catch (e) {
+            // Ignore cross-origin errors
+          }
+        }, 500);
+      } catch (error) {
+        console.error('Error starting authorization:', error);
+      }
+    });
+    
+    // Handle API requests
+    document.getElementById('fetchDataBtn').addEventListener('click', async () => {
+      if (!encryptedToken) {
+        alert('Please authorize first');
+        return;
+      }
+      
+      const endpoint = document.getElementById('apiEndpoint').value;
+      const responseElem = document.getElementById('apiResponse');
+      responseElem.textContent = 'Loading...';
+      
+      try {
+        // Map selection to an API endpoint
+        const apiEndpoint = endpoint === 'profile' 
+          ? 'https://api.example.com/user/profile'
+          : 'https://api.example.com/user/data';
+        
+        // Make the proxy request
+        const response = await fetch('/proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            encrypted_token: encryptedToken,
+            endpoint: apiEndpoint,
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+          })
+        });
+        
+        // Check for an updated token (if the token was refreshed)
+        const updatedToken = response.headers.get('X-Updated-Token');
+        if (updatedToken) {
+          encryptedToken = JSON.parse(updatedToken);
+          localStorage.setItem('encryptedToken', JSON.stringify(encryptedToken));
+          document.getElementById('encryptedToken').textContent = JSON.stringify(encryptedToken, null, 2);
+        }
+        
+        // Display the response
+        const text = await response.text();
+        try {
+          const json = JSON.parse(text);
+          responseElem.textContent = JSON.stringify(json, null, 2);
+        } catch (e) {
+          responseElem.textContent = text;
+        }
+      } catch (error) {
+        responseElem.textContent = 'Error: ' + error.message;
+      }
+    });
+  </script>
+</body>
+</html>`;
